@@ -1,5 +1,6 @@
 import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
+import AuditLog from '../models/AuditLog.js';
 
 // @desc    Get all developers
 // @route   GET /api/users/developers
@@ -9,6 +10,69 @@ export const getDevelopers = async (req, res) => {
         const developers = await User.find({ role: 'developer' }).select('-password');
         res.json(developers);
     } catch (error) {
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
+// @desc    Get current user profile
+// @route   GET /api/users/profile
+// @access  Private
+export const getProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select('-password -mfaSecret -mfaBackupCodes');
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ message: 'Server Error', error: error.message });
+    }
+};
+
+// @desc    Update current user profile
+// @route   PUT /api/users/profile
+// @access  Private
+export const updateProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        const { name, phone, bio, status, profileImage } = req.body;
+
+        if (name) user.name = name;
+        if (phone) user.phone = phone;
+        if (bio) user.bio = bio;
+        if (status) user.status = status;
+        if (profileImage) user.profileImage = profileImage;
+
+        await user.save();
+
+        // Log profile update
+        await AuditLog.create({
+            userId: user._id,
+            action: 'profile_updated',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            status: 'success',
+            details: { updatedFields: Object.keys(req.body) }
+        });
+
+        res.json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            bio: user.bio,
+            status: user.status,
+            profileImage: user.profileImage,
+            message: 'Profile updated successfully'
+        });
+    } catch (error) {
+        console.error('Update Profile Error:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };
