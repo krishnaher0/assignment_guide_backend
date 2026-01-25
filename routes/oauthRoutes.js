@@ -80,16 +80,18 @@ router.get('/oauth-urls', (req, res) => {
     });
   }
 
+  const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5001}`;
+
   const googleUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
     `client_id=${process.env.GOOGLE_CLIENT_ID}&` +
-    `redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/auth/google/callback')}&` +
+    `redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI || `${backendUrl}/auth/google/callback`)}&` +
     `response_type=code&` +
     `scope=profile%20email&` +
     `state=client`;
 
   const githubUrl = `https://github.com/login/oauth/authorize?` +
     `client_id=${process.env.GITHUB_CLIENT_ID}&` +
-    `redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI || 'http://localhost:5000/auth/github/callback')}&` +
+    `redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI || `${backendUrl}/auth/github/callback`)}&` +
     `scope=user:email%20read:user&` +
     `state=client`;
 
@@ -101,16 +103,18 @@ router.get('/oauth-urls', (req, res) => {
 
 // Get OAuth URLs for developer role
 router.get('/oauth-urls/developer', (req, res) => {
+  const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5001}`;
+
   const googleUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
     `client_id=${process.env.GOOGLE_CLIENT_ID}&` +
-    `redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/auth/google/callback')}&` +
+    `redirect_uri=${encodeURIComponent(process.env.GOOGLE_REDIRECT_URI || `${backendUrl}/auth/google/callback`)}&` +
     `response_type=code&` +
     `scope=profile%20email&` +
     `state=developer`;
 
   const githubUrl = `https://github.com/login/oauth/authorize?` +
     `client_id=${process.env.GITHUB_CLIENT_ID}&` +
-    `redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI || 'http://localhost:5000/auth/github/callback')}&` +
+    `redirect_uri=${encodeURIComponent(process.env.GITHUB_REDIRECT_URI || `${backendUrl}/auth/github/callback`)}&` +
     `scope=user:email%20read:user&` +
     `state=developer`;
 
