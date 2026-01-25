@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { encrypt, decrypt } from '../utils/encryption.js';
 
 /**
  * User Model (Simplified)
@@ -21,7 +22,11 @@ const userSchema = mongoose.Schema({
         // Not required at schema level - OAuth users don't have passwords
         // Validation for manual auth is handled in authController
     },
-    phone: String,
+    phone: {
+        type: String,
+        set: encrypt,
+        get: decrypt,
+    },
 
     // Role (client = student, developer/worker = team member, admin)
     role: {
@@ -67,9 +72,104 @@ const userSchema = mongoose.Schema({
         type: Boolean,
         default: false,
     },
+    emailVerificationToken: String,
+    emailVerificationExpires: Date,
+
+    // OTP verification (6-digit code)
+    emailVerificationOTP: String,
+    emailVerificationOTPExpires: Date,
 
     // Profile image (keep for display purposes)
     profileImage: String,
+
+    // ============================================
+    // SECURITY FIELDS
+    // ============================================
+
+    // Password Security
+    passwordChangedAt: Date,
+    passwordExpiresAt: Date,
+    mustChangePassword: {
+        type: Boolean,
+        default: false,
+    },
+    passwordResetToken: String,
+    passwordResetExpires: Date,
+
+    // Multi-Factor Authentication
+    mfaEnabled: {
+        type: Boolean,
+        default: false,
+    },
+    mfaSecret: String, // Encrypted TOTP secret
+    mfaBackupCodes: [String], // Hashed recovery codes
+    mfaMethod: {
+        type: String,
+        enum: ['totp'],
+        default: 'totp',
+    },
+
+    // Brute Force Protection
+    loginAttempts: {
+        count: {
+            type: Number,
+            default: 0,
+        },
+        lastAttempt: Date,
+        lockedUntil: Date,
+    },
+
+    // Session Management
+    activeSessions: [{
+        sessionId: String,
+        deviceInfo: String,
+        ipAddress: String,
+        location: String,
+        lastActivity: Date,
+        createdAt: {
+            type: Date,
+            default: Date.now,
+        },
+    }],
+
+    // IP Geolocation Tracking
+    loginLocations: [{
+        ipAddress: String,
+        location: String,
+        city: String,
+        country: String,
+        timestamp: Date,
+        isNewLocation: Boolean,
+    }],
+
+    // Privacy Settings
+    privacySettings: {
+        profileVisibility: {
+            type: String,
+            enum: ['public', 'private', 'friends'],
+            default: 'public',
+        },
+    },
+
+    // Notification Preferences
+    notificationPreferences: {
+        email: {
+            type: Boolean,
+            default: true,
+        },
+        sms: {
+            type: Boolean,
+            default: false,
+        },
+        push: {
+            type: Boolean,
+            default: true,
+        },
+        securityAlerts: {
+            type: Boolean,
+            default: true,
+        },
+    },
 
     // ============================================
     // LEGACY FIELDS (kept for backwards compatibility)
@@ -109,12 +209,12 @@ const userSchema = mongoose.Schema({
 });
 
 // Virtual: Check if user is a worker
-userSchema.virtual('isWorker').get(function() {
+userSchema.virtual('isWorker').get(function () {
     return this.role === 'worker';
 });
 
 // Virtual: Check if user is admin
-userSchema.virtual('isAdmin').get(function() {
+userSchema.virtual('isAdmin').get(function () {
     return this.role === 'admin';
 });
 
