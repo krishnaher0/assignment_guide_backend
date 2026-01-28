@@ -14,7 +14,13 @@ callbackRouter.get('/google/callback', async (req, res) => {
       return res.status(400).json({ error: 'No authorization code provided' });
     }
 
-    const { user, token } = await googleOAuthCallback(code, role);
+    const sessionData = {
+      deviceInfo: req.headers['user-agent'],
+      ipAddress: req.ip || req.connection.remoteAddress,
+      location: 'OAuth Login'
+    };
+
+    const { user, token, sessionId } = await googleOAuthCallback(code, role, sessionData);
 
     // Create user data object with all required fields
     const userData = {
@@ -28,7 +34,7 @@ callbackRouter.get('/google/callback', async (req, res) => {
     };
 
     // Redirect to frontend with token
-    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}&provider=google`;
+    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}&provider=google&sessionId=${sessionId}`;
     res.redirect(redirectUrl);
   } catch (error) {
     console.error('Google callback error:', error);
@@ -47,7 +53,13 @@ callbackRouter.get('/github/callback', async (req, res) => {
       return res.status(400).json({ error: 'No authorization code provided' });
     }
 
-    const { user, token } = await githubOAuthCallback(code, role);
+    const sessionData = {
+      deviceInfo: req.headers['user-agent'],
+      ipAddress: req.ip || req.connection.remoteAddress,
+      location: 'OAuth Login'
+    };
+
+    const { user, token, sessionId } = await githubOAuthCallback(code, role, sessionData);
 
     // Create user data object with all required fields
     const userData = {
@@ -61,7 +73,7 @@ callbackRouter.get('/github/callback', async (req, res) => {
     };
 
     // Redirect to frontend with token
-    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}&provider=github`;
+    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&user=${encodeURIComponent(JSON.stringify(userData))}&provider=github&sessionId=${sessionId}`;
     res.redirect(redirectUrl);
   } catch (error) {
     console.error('GitHub callback error:', error);
