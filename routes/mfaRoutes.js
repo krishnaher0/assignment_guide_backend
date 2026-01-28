@@ -9,11 +9,12 @@ import {
 } from '../controllers/mfaController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { mfaLimiter } from '../middleware/rateLimiter.js';
+import { checkAccountLockout, checkIPBlock } from '../middleware/bruteForceProtection.js';
 
 const router = express.Router();
 
 // Public routes (MFA verification during login)
-router.post('/verify-login', mfaLimiter, verifyMFALogin);
+router.post('/verify-login', checkIPBlock, mfaLimiter, checkAccountLockout, verifyMFALogin);
 
 // Protected routes
 router.use(protect);
