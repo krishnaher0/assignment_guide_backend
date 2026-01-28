@@ -3,7 +3,7 @@ import User from '../models/User.js';
 import generateToken from '../utils/generateToken.js';
 
 // Google OAuth Token Exchange
-const googleOAuthCallback = async (code, role = 'client') => {
+const googleOAuthCallback = async (code, role = 'client', sessionData = null) => {
   try {
     // Exchange auth code for access token
     const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
@@ -36,16 +36,27 @@ const googleOAuthCallback = async (code, role = 'client') => {
         authMethod: 'google',
         isEmailVerified: true,
       });
-      await user.save();
     } else if (!user.googleId) {
       // Link Google account if not already linked
       user.googleId = id;
       user.authMethod = user.authMethod === 'manual' ? 'both' : 'google';
-      await user.save();
     }
 
-    const token = generateToken(user._id);
-    return { user, token };
+    let sessionId = null;
+    if (sessionData) {
+      sessionId = Math.random().toString(36).substring(2, 15);
+      user.activeSessions.push({
+        sessionId,
+        ...sessionData,
+        lastActivity: new Date()
+      });
+      if (user.activeSessions.length > 5) user.activeSessions.shift();
+    }
+
+    await user.save();
+
+    const token = generateToken(user._id, sessionId);
+    return { user, token, sessionId };
   } catch (error) {
     console.error('Google OAuth error:', error.message);
     throw new Error('Google OAuth failed: ' + error.message);
@@ -53,7 +64,7 @@ const googleOAuthCallback = async (code, role = 'client') => {
 };
 
 // GitHub OAuth Token Exchange
-const githubOAuthCallback = async (code, role = 'client') => {
+const githubOAuthCallback = async (code, role = 'client', sessionData = null) => {
   try {
     // Exchange auth code for access token
     const tokenResponse = await axios.post('https://github.com/login/oauth/access_token', {
@@ -98,17 +109,28 @@ const githubOAuthCallback = async (code, role = 'client') => {
         authMethod: 'github',
         isEmailVerified: !!email,
       });
-      await user.save();
     } else if (!user.githubId) {
       // Link GitHub account if not already linked
       user.githubId = id;
       user.username = login;
       user.authMethod = user.authMethod === 'manual' ? 'both' : 'github';
-      await user.save();
     }
 
-    const token = generateToken(user._id);
-    return { user, token };
+    let sessionId = null;
+    if (sessionData) {
+      sessionId = Math.random().toString(36).substring(2, 15);
+      user.activeSessions.push({
+        sessionId,
+        ...sessionData,
+        lastActivity: new Date()
+      });
+      if (user.activeSessions.length > 5) user.activeSessions.shift();
+    }
+
+    await user.save();
+
+    const token = generateToken(user._id, sessionId);
+    return { user, token, sessionId };
   } catch (error) {
     console.error('GitHub OAuth error:', error.message);
     throw new Error('GitHub OAuth failed: ' + error.message);
