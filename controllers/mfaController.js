@@ -137,6 +137,9 @@ export const verifyMFALogin = async (req, res) => {
                 details: { method: isBackupCode ? 'backup_code' : 'totp' }
             });
 
+            // Track failed attempt for brute force protection
+            await trackLoginAttempt(req, res, false);
+
             return res.status(401).json({ message: 'Invalid verification code' });
         }
 
@@ -192,7 +195,7 @@ export const verifyMFALogin = async (req, res) => {
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'strict'
         };
-        const jwtToken = generateToken(user._id);
+        const jwtToken = generateToken(user._id, session.sessionId);
 
         res.cookie('token', jwtToken, options).json({
             message: 'MFA verified successfully',
@@ -202,6 +205,7 @@ export const verifyMFALogin = async (req, res) => {
             email: user.email,
             role: user.role,
             token: jwtToken,
+            sessionId: session.sessionId
         });
     } catch (error) {
         console.error('MFA Verify Login Error:', error);
