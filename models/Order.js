@@ -291,6 +291,7 @@ const orderSchema = mongoose.Schema({
     paidAmount: { type: Number, default: 0 },
     paidAt: Date,
     transactionId: String,
+    transactionUuid: String, // For eSewa payment verification
     paymentVerifiedAt: Date,
     paymentVerifiedBy: {
         type: mongoose.Schema.Types.ObjectId,
