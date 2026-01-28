@@ -9,8 +9,8 @@ import { sendEmail } from '../services/emailService.js';
 import AuditLog from '../models/AuditLog.js';
 
 // Helper to send token response with cookie
-const sendTokenResponse = (user, statusCode, res) => {
-    const token = generateToken(user._id);
+const sendTokenResponse = (user, statusCode, res, sessionId = null) => {
+    const token = generateToken(user._id, sessionId);
 
     const options = {
         expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
@@ -27,6 +27,7 @@ const sendTokenResponse = (user, statusCode, res) => {
             email: user.email,
             role: user.role,
             token, // Keep returning token for frontend (localStorage)
+            sessionId
         });
 };
 
@@ -81,7 +82,9 @@ export const loginUser = async (req, res) => {
             }
 
             // Check for MFA
+            console.log(`[Login] MFA Check - mfaEnabled: ${user.mfaEnabled}`);
             if (user.mfaEnabled) {
+                console.log(`[Login] MFA required for user ${user._id}`);
                 // Return partial success for MFA step
                 return res.status(200).json({
                     mfaRequired: true,
@@ -170,7 +173,7 @@ export const loginUser = async (req, res) => {
 
             await user.save();
 
-            sendTokenResponse(user, 200, res);
+            sendTokenResponse(user, 200, res, session.sessionId);
         } else {
             await trackLoginAttempt(req, res, false);
             res.status(401).json({ message: 'Invalid email or password' });
@@ -524,8 +527,25 @@ export const verifyOTP = async (req, res) => {
             status: 'success'
         });
 
+        // Create session
+        const ipAddress = req.ip || req.connection.remoteAddress;
+        const geo = geoip.lookup(ipAddress);
+        const location = geo ? `${geo.city}, ${geo.country}` : 'Unknown';
+
+        const session = {
+            sessionId: Math.random().toString(36).substring(2, 15),
+            deviceInfo: req.headers['user-agent'],
+            ipAddress,
+            location,
+            lastActivity: new Date()
+        };
+
+        user.activeSessions.push(session);
+        if (user.activeSessions.length > 5) user.activeSessions.shift();
+        await user.save();
+
         // Send token response to log user in
-        sendTokenResponse(user, 200, res);
+        sendTokenResponse(user, 200, res, session.sessionId);
     } catch (error) {
         console.error('Verify OTP Error:', error);
         res.status(500).json({ message: 'Server error' });
