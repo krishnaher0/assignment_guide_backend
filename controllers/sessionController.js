@@ -92,6 +92,34 @@ export const revokeAllOtherSessions = async (req, res) => {
 };
 
 /**
+ * @desc    Logout from all devices
+ * @route   DELETE /api/sessions/logout-all
+ * @access  Private
+ */
+export const revokeAllSessions = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        user.activeSessions = [];
+        await user.save();
+
+        await AuditLog.create({
+            userId: user._id,
+            action: 'session_revoked',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            status: 'success',
+            details: { type: 'all_devices' }
+        });
+
+        res.json({ message: 'Logged out from all devices successfully' });
+    } catch (error) {
+        console.error('Revoke All Devices Error:', error);
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
+};
+
+/**
  * @desc    Get login history/locations
  * @route   GET /api/sessions/history
  * @access  Private
