@@ -7,7 +7,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
-import mongoSanitize from 'express-mongo-sanitize';
+import sanitizeInput from './middleware/sanitizeInput.js';
 import connectDB from './config/db.js';
 import { initializeSocket } from './config/socket.js';
 import { initEmailService } from './services/emailService.js';
@@ -44,11 +44,14 @@ import { oauthUrlRouter, oauthCallbackRouter } from './routes/oauthRoutes.js';
 // Security routes
 import mfaRoutes from './routes/mfaRoutes.js';
 import sessionRoutes from './routes/sessionRoutes.js';
+import auditRoutes from './routes/auditRoutes.js';
+import csrfRoutes from './routes/csrfRoutes.js';
 
 // Security Middleware
 import { loginLimiter, registerLimiter, apiLimiter } from './middleware/rateLimiter.js';
 import { checkAccountLockout, checkIPBlock } from './middleware/bruteForceProtection.js';
 import { checkCaptchaRequired } from './middleware/captchaVerifier.js';
+import { csrfProtection, csrfErrorHandler } from './middleware/csrfProtection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,27 +71,77 @@ const io = initializeSocket(server);
 app.set('io', io);
 
 // Security Middleware
+
+// HTTPS Enforcement (Production Only)
+app.use((req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+        return res.redirect(301, `https://${req.headers.host}${req.url}`);
+    }
+    next();
+});
+
 app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
+    hsts: {
+        maxAge: 31536000, // 1 year in seconds
+        includeSubDomains: true,
+        preload: true
+    }
 }));
+const LOCAL_IP = 'http://192.168.1.5:5173'; // your machine IP
+
+// app.use(cors({
+//     origin: [
+//         process.env.CLIENT_URL || 'http://localhost:5173',
+//         'http://localhost:5173',
+//         'http://127.0.0.1:5173',
+//         'http://localhost:3000',
+//         'http://127.0.0.1:5173',
+//         'https://www.projecthubnepal.app',
+//         'https://projecthubnepal.app',
+//         LOCAL_IP
+//     ],
+//     credentials: true,
+//     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//     allowedHeaders: ['Content-Type', 'Authorization', 'x-csrf-token'],
+// }));
+
 app.use(cors({
-    origin: [
-        process.env.CLIENT_URL || 'http://localhost:5173',
-        'http://localhost:5173',
-        'http://localhost:3000',
-        'http://127.0.0.1:5173',
-        'https://www.projecthubnepal.app',
-        'https://projecthubnepal.app',
-    ],
+    origin: (origin, callback) => {
+        // allow requests with no origin like mobile apps or curl
+        if (!origin) return callback(null, true);
+
+        const allowedOrigins = [
+            'http://localhost:5173',
+            'http://127.0.0.1:5173',
+            'http://localhost:3000',
+            'https://www.projecthubnepal.app',
+            'https://projecthubnepal.app'
+        ];
+
+        // Allow all local network IPs dynamically
+        if (origin.startsWith('http://172.26.') || origin.startsWith('http://192.168.')) {
+            return callback(null, true);
+        }
+
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        } else {
+            return callback(new Error('CORS not allowed for this origin'), false);
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-csrf-token'],
 }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
-// app.use(mongoSanitize());
+
+// Custom MongoDB Sanitization (prevents NoSQL injection)
+app.use(sanitizeInput);
 
 // Rate Limiting (Using imported limiters from middleware/rateLimiter.js)
 app.use('/api', apiLimiter);
@@ -116,6 +169,29 @@ app.use('/auth', oauthCallbackRouter);
 // MFA & Sessions
 app.use('/api/mfa', mfaRoutes);
 app.use('/api/sessions', sessionRoutes);
+
+// CSRF Token Generation (before protected routes)
+app.use('/api', csrfRoutes);
+
+// Apply CSRF protection to state-changing routes
+// Note: GET, HEAD, OPTIONS are automatically ignored by CSRF middleware
+app.use('/api/admin', csrfProtection);
+app.use('/api/users', csrfProtection);
+app.use('/api/orders', csrfProtection);
+app.use('/api/quotes', csrfProtection);
+app.use('/api/contracts', csrfProtection);
+app.use('/api/invoices', csrfProtection);
+app.use('/api/payment', csrfProtection);
+app.use('/api/upload', csrfProtection);
+app.use('/api/developer', csrfProtection);
+app.use('/api/workspaces', csrfProtection);
+app.use('/api/messages', csrfProtection);
+app.use('/api/chat', csrfProtection);
+app.use('/api/settings', csrfProtection);
+app.use('/api/team', csrfProtection);
+
+// Audit Logs (Admin only)
+app.use('/api/audit', auditRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);
@@ -163,10 +239,14 @@ app.use('/api/settings', settingsRoutes);
 // Team management (legacy)
 app.use('/api/team', teamRoutes);
 
-const PORT = process.env.PORT || 5000;
+// CSRF Error Handler (must be after all routes)
+app.use(csrfErrorHandler);
 
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+server.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`);
     console.log(`Socket.io enabled for real-time notifications`);
 
     // Start background services
