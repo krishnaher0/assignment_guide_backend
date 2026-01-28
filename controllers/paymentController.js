@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import Order from '../models/Order.js';
 import User from '../models/User.js';
+import AuditLog from '../models/AuditLog.js';
 import { createNotification } from './notificationController.js';
 import { sendToRole, sendToUser } from '../config/socket.js';
 
@@ -123,8 +124,33 @@ export const initiatePayment = async (req, res) => {
         // Signature Generation for eSewa v2
         // Message format: total_amount,transaction_uuid,product_code
         const signatureString = `total_amount=${totalAmount},transaction_uuid=${transactionUuid},product_code=${productCode}`;
-        const secretKey = "8gBm/:&EnhH.1/q"; // Default Test Secret Key
+        const secretKey = process.env.ESEWA_SECRET_KEY;
+
+        if (!secretKey) {
+            return res.status(500).json({ message: 'Payment gateway not configured properly' });
+        }
+
         const signature = crypto.createHmac('sha256', secretKey).update(signatureString).digest('base64');
+
+        // Store transaction UUID in order for verification
+        order.transactionUuid = transactionUuid;
+        await order.save();
+
+        // Log payment initiation
+        await AuditLog.create({
+            userId: req.user._id,
+            action: 'payment_initiated',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            status: 'success',
+            severity: 'medium',
+            details: {
+                orderId: order._id,
+                amount: totalAmount,
+                transactionUuid: transactionUuid,
+                paymentMethod: 'esewa'
+            }
+        });
 
         res.json({
             url: ESEWA_TEST_URL,
@@ -143,6 +169,22 @@ export const initiatePayment = async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Payment Initiation Error:', error);
+
+        // Log failed payment initiation
+        await AuditLog.create({
+            userId: req.user?._id,
+            action: 'payment_initiation_failed',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            status: 'failure',
+            severity: 'medium',
+            details: {
+                orderId: req.body.orderId,
+                error: error.message
+            }
+        });
+
         res.status(500).json({ message: 'Payment Initiation Failed', error: error.message });
     }
 };
@@ -150,8 +192,6 @@ export const initiatePayment = async (req, res) => {
 // @desc    Verify Payment (Callback from Frontend passing eSewa response)
 // @route   POST /api/payment/verify
 // @access  Private
-// Note: Ideally eSewa calls your server (Server-to-Server), but sandbox often redirects browser. 
-// We will verify the encoded payload sent back to frontend.
 export const verifyPayment = async (req, res) => {
     try {
         const { encodedResponse, orderId } = req.body;
@@ -160,39 +200,21 @@ export const verifyPayment = async (req, res) => {
             return res.status(400).json({ message: 'Order ID is required' });
         }
 
+        if (!encodedResponse) {
+            return res.status(400).json({ message: 'Payment response data is required' });
+        }
+
         const order = await Order.findById(orderId).populate('assignedDeveloper');
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
 
-        // If no encoded response, it might be a direct success from eSewa
-        // Mark as verified anyway since the redirect means success in eSewa sandbox
-        if (!encodedResponse) {
-            console.log('No encoded response provided, assuming payment successful for order:', orderId);
-            order.paymentStatus = 'paid';
-            order.status = 'delivered';
-            order.paidAt = new Date();
-
-            // Update developer earnings
-            if (order.assignedDeveloper) {
-                const developer = await User.findById(order.assignedDeveloper._id);
-                if (developer) {
-                    const budgetAmount = parseFloat(order.budget.replace(/[^0-9.-]+/g, ""));
-                    if (!isNaN(budgetAmount)) {
-                        developer.earnings += budgetAmount;
-                        await developer.save();
-                    }
-                }
-            }
-
-            await order.save();
-            return res.json({
-                message: 'Payment verified and order delivered',
-                order: order
-            });
+        // Prevent duplicate payment verification
+        if (order.paymentStatus === 'paid') {
+            return res.status(400).json({ message: 'Payment already verified for this order' });
         }
 
-        // Decode: it is base64 encoded JSON
+        // Decode the base64 encoded JSON response
         let responseData;
         try {
             // Strip the ?data= prefix if present
@@ -204,42 +226,54 @@ export const verifyPayment = async (req, res) => {
             responseData = JSON.parse(decodedString);
         } catch (decodeError) {
             console.error('Failed to decode payment response:', decodeError.message);
-            console.error('Received encodedResponse:', encodedResponse);
-
-            // If decoding fails, treat as successful payment for development/testing
-            console.log('Treating as successful payment for order:', orderId);
-            order.paymentStatus = 'paid';
-            order.status = 'delivered';
-            order.paidAt = new Date();
-
-            // Update developer earnings
-            if (order.assignedDeveloper) {
-                const developer = await User.findById(order.assignedDeveloper._id);
-                if (developer) {
-                    const budgetAmount = parseFloat(order.budget.replace(/[^0-9.-]+/g, ""));
-                    if (!isNaN(budgetAmount)) {
-                        developer.earnings += budgetAmount;
-                        await developer.save();
-                    }
-                }
-            }
-
-            await order.save();
-            return res.json({
-                message: 'Payment verified and order delivered',
-                order: order
+            return res.status(400).json({
+                message: 'Invalid payment response format',
+                error: 'Unable to decode payment data'
             });
         }
 
-        // responseData structure: { status: 'COMPLETE', signature: '...', transaction_code: '...', total_amount: ... }
-
+        // Verify payment status
         if (responseData.status !== 'COMPLETE') {
+            order.paymentStatus = 'failed';
+            await order.save();
             return res.status(400).json({ message: 'Payment failed or cancelled' });
         }
 
-        // In production, you MUST verify the signature again here.
-        // For Sandbox/Demo speed, we assume validity if status is COMPLETE and update Order.
+        // Verify signature for security
+        const secretKey = process.env.ESEWA_SECRET_KEY;
+        if (!secretKey) {
+            return res.status(500).json({ message: 'Payment gateway not configured properly' });
+        }
 
+        // Reconstruct the signature string using the response data
+        const { transaction_code, total_amount, transaction_uuid, product_code } = responseData;
+        const signatureString = `transaction_code=${transaction_code},status=${responseData.status},total_amount=${total_amount},transaction_uuid=${transaction_uuid},product_code=${product_code},signed_field_names=transaction_code,status,total_amount,transaction_uuid,product_code`;
+
+        // Calculate expected signature
+        const expectedSignature = crypto.createHmac('sha256', secretKey)
+            .update(signatureString)
+            .digest('base64');
+
+        // Verify signature matches
+        if (responseData.signature !== expectedSignature) {
+            console.error('Signature mismatch!');
+            console.error('Expected:', expectedSignature);
+            console.error('Received:', responseData.signature);
+            return res.status(400).json({
+                message: 'Payment verification failed',
+                error: 'Invalid signature'
+            });
+        }
+
+        // Verify the transaction UUID matches the order
+        if (responseData.transaction_uuid !== order.transactionUuid) {
+            return res.status(400).json({
+                message: 'Transaction UUID mismatch',
+                error: 'Payment does not match order'
+            });
+        }
+
+        // Update order with payment details
         order.paymentStatus = 'paid';
         order.status = 'delivered';
         order.paidAmount = responseData.total_amount;
@@ -260,13 +294,47 @@ export const verifyPayment = async (req, res) => {
         }
 
         await order.save();
-        res.json({ 
+
+        // Log successful payment verification to audit trail
+        await AuditLog.create({
+            userId: order.client,
+            action: 'payment_verified',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            status: 'success',
+            severity: 'high',
+            details: {
+                orderId: order._id,
+                transactionId: responseData.transaction_code,
+                amount: responseData.total_amount,
+                paymentMethod: 'esewa'
+            }
+        });
+
+        res.json({
             message: 'Payment verified and order delivered',
             order: order
         });
 
     } catch (error) {
         console.error('Payment Verification Error:', error);
+
+        // Log failed payment verification
+        if (req.body.orderId) {
+            await AuditLog.create({
+                userId: req.user?._id,
+                action: 'payment_verification_failed',
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+                status: 'failure',
+                severity: 'high',
+                details: {
+                    orderId: req.body.orderId,
+                    error: error.message
+                }
+            });
+        }
+
         res.status(500).json({ message: 'Payment Verification Failed', error: error.message });
     }
 };
